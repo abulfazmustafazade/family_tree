@@ -43,11 +43,26 @@ export function buildTreeLayout(people) {
   // Cütlükləri vahid kimi qruplaşdır
   const placed = new Set();
   const units = [];
-  const sortedPeople = [...people].sort((a, b) => gen[a.id] - gen[b.id]);
-  sortedPeople.forEach((p) => {
+  const sortedPeople = [...people].sort((a, b) => {
+  if (gen[a.id] !== gen[b.id]) return gen[a.id] - gen[b.id];
+  const dateA = a.birthDate || '9999-99-99';
+  const dateB = b.birthDate || '9999-99-99';
+  return dateA.localeCompare(dateB);
+});
+sortedPeople.forEach((p) => {
     if (placed.has(p.id)) return;
-    if (p.spouseId && byId[p.spouseId] && !placed.has(p.spouseId)) {
-      units.push({ ids: [p.id, p.spouseId], gen: gen[p.id] });
+    const spouse = p.spouseId ? byId[p.spouseId] : null;
+    if (spouse && !placed.has(p.spouseId)) {
+      const pHasParents = !!(p.fatherId || p.motherId);
+      const sHasParents = !!(spouse.fatherId || spouse.motherId);
+      // Valideynləri olan şəxs birinci gedər (strukturu o "sabitləşdirir")
+      let firstId, secondId;
+      if (!pHasParents && sHasParents) {
+        firstId = p.spouseId; secondId = p.id;
+      } else {
+        firstId = p.id; secondId = p.spouseId;
+      }
+      units.push({ ids: [firstId, secondId], gen: gen[p.id] });
       placed.add(p.id);
       placed.add(p.spouseId);
     } else {
@@ -57,11 +72,25 @@ export function buildTreeLayout(people) {
   });
 
   // Nəsillər üzrə qruplaşdır
-  const byGen = {};
-  units.forEach((u) => {
-    (byGen[u.gen] = byGen[u.gen] || []).push(u);
-  });
+const byGen = {};
+  units.forEach((u) => { (byGen[u.gen] = byGen[u.gen] || []).push(u); });
   const maxGen = Math.max(...Object.keys(byGen).map(Number), 0);
+
+  // Hər nəsil sırasını "əsas şəxsin" (valideynləri olanın) doğum tarixinə görə sırala
+  const getPrimary = (unit) => {
+    for (const id of unit.ids) {
+      const p = byId[id];
+      if (p?.fatherId || p?.motherId) return p;
+    }
+    return byId[unit.ids[0]];
+  };
+  Object.values(byGen).forEach((row) => {
+    row.sort((a, b) => {
+      const dateA = getPrimary(a)?.birthDate || '9999-99-99';
+      const dateB = getPrimary(b)?.birthDate || '9999-99-99';
+      return dateA.localeCompare(dateB);
+    });
+  });
 
   const unitWidth = (u) => u.ids.length * NODE_W + (u.ids.length - 1) * 10;
 
