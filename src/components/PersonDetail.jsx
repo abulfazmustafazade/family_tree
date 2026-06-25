@@ -1,7 +1,7 @@
 import { Edit3, Calendar, FileText } from 'lucide-react';
 import { fmtDate } from '../lib/helpers.js';
 
-export function PersonDetail({ person, people, role, onEdit, onClose }) {
+export function PersonDetail({ person, people, role, onEdit, onClose, onSetRoot }) {
   if (!person) return null;
   const byId = Object.fromEntries(people.map((p) => [p.id, p]));
   const father = person.fatherId ? byId[person.fatherId] : null;
@@ -90,6 +90,12 @@ export function PersonDetail({ person, people, role, onEdit, onClose }) {
       )}
 
       <div className="flex flex-col sm:flex-row gap-2">
+        <button
+          onClick={() => { onSetRoot(person.id); }}
+          className="w-full sm:w-auto px-4 py-2.5 bg-stone-800 hover:bg-stone-900 text-white text-sm font-medium rounded-md flex items-center justify-center gap-2"
+        >
+          🌿 Şəcərəsinə bax
+        </button>
         <button
           onClick={() => onEdit(person)}
           className="flex-1 px-4 py-2.5 bg-amber-700 hover:bg-amber-800 text-white text-sm font-medium rounded-md flex items-center justify-center gap-2"
