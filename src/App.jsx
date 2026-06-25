@@ -53,6 +53,49 @@ function Modal({ title, onClose, children }) {
 }
 
 // ─── App ──────────────────────────────────────────────────
+function getDescendants(rootId, people) {
+  const byId = Object.fromEntries(people.map((p) => [p.id, p]));
+  const result = new Set([rootId]);
+  if (byId[rootId]?.spouseId) result.add(byId[rootId].spouseId);
+  const queue = [rootId];
+  while (queue.length) {
+    const id = queue.shift();
+    people.forEach((p) => {
+      if ((p.fatherId === id || p.motherId === id) && !result.has(p.id)) {
+        result.add(p.id);
+        if (p.spouseId) result.add(p.spouseId);
+        queue.push(p.id);
+      }
+    });
+  }
+  return people.filter((p) => result.has(p.id));
+}
+
+function getAncestors(rootId, people) {
+  const byId = Object.fromEntries(people.map((p) => [p.id, p]));
+  const result = new Set([rootId]);
+  if (byId[rootId]?.spouseId) result.add(byId[rootId].spouseId);
+  const queue = [rootId];
+  while (queue.length) {
+    const id = queue.shift();
+    const p = byId[id];
+    if (!p) continue;
+    if (p.fatherId && !result.has(p.fatherId)) {
+      result.add(p.fatherId);
+      if (byId[p.fatherId]?.spouseId) result.add(byId[p.fatherId].spouseId);
+      queue.push(p.fatherId);
+    }
+    if (p.motherId && !result.has(p.motherId)) {
+      result.add(p.motherId);
+      if (byId[p.motherId]?.spouseId) result.add(byId[p.motherId].spouseId);
+      queue.push(p.motherId);
+    }
+  }
+  return people.filter((p) => result.has(p.id));
+}
+const [rootId, setRootId]     = useState(null);
+const [treeMode, setTreeMode] = useState('descendants'); // 'descendants' | 'ancestors'
+
 export default function App() {
   // Phase: 'loading' | 'error' | 'setup' | 'login' | 'app'
   const [phase, setPhase]   = useState('loading');
@@ -271,6 +314,13 @@ export default function App() {
   };
 
   // ── search ───────────────────────────────────────────────
+const visiblePeople = useMemo(() => {
+  if (!rootId) return people;
+  return treeMode === 'ancestors'
+    ? getAncestors(rootId, people)
+    : getDescendants(rootId, people);
+}, [people, rootId, treeMode]);
+  
   const searchResults = useMemo(() => {
     if (!search.trim()) return [];
     const q = search.toLowerCase();
@@ -416,9 +466,49 @@ export default function App() {
           </button>
         </div>
 
+        {rootId && (() => {
+          const rootPerson = people.find((p) => p.id === rootId);
+          return (
+            <div className="flex flex-wrap items-center gap-2 mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+              <span className="text-stone-500 text-xs">Şəcərə:</span>
+              <span className="font-semibold text-stone-900">
+                {rootPerson?.firstName} {rootPerson?.lastName}
+              </span>
+              <div className="flex gap-1 ml-auto flex-wrap">
+                <button
+                  onClick={() => setTreeMode('descendants')}
+                  className={`px-2.5 py-1 text-xs rounded-md font-medium ${
+                    treeMode === 'descendants'
+                      ? 'bg-amber-700 text-white'
+                      : 'bg-white text-stone-600 border border-stone-200 hover:bg-stone-50'
+                  }`}
+                >
+                  Nəsil ↓
+                </button>
+                <button
+                  onClick={() => setTreeMode('ancestors')}
+                  className={`px-2.5 py-1 text-xs rounded-md font-medium ${
+                    treeMode === 'ancestors'
+                      ? 'bg-amber-700 text-white'
+                      : 'bg-white text-stone-600 border border-stone-200 hover:bg-stone-50'
+                  }`}
+                >
+                  Kök ↑
+                </button>
+                <button
+                  onClick={() => setRootId(null)}
+                  className="px-2.5 py-1 text-xs rounded-md bg-white text-stone-600 border border-stone-200 hover:bg-stone-50 font-medium"
+                >
+                  Tam ağac
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+
         <div className="h-[calc(100vh-180px)] sm:h-[calc(100vh-200px)]">
           <TreeView
-            people={people}
+            people={visiblePeople}
             highlightedId={highlightedId}
             onPersonClick={(p) => {
               setSelected(p);
@@ -439,6 +529,11 @@ export default function App() {
               role={role}
               onEdit={(p) => { setEditing(p); setModal('edit'); }}
               onClose={closeModal}
+              onSetRoot={(id) => {
+                setRootId(id);
+                setTreeMode('descendants');
+                closeModal();
+              }}
             />
           )}
 
