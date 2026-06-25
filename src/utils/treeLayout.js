@@ -1,8 +1,13 @@
-// Ailə ağacının düzülüş alqoritmi
-// - Nəsillər üzrə düzülür
-// - Övladlar doğum tarixinə görə soldan sağa sıralanır
-// - Ər-arvad: ailə kökü olan şəxs birinci gedər
-// - Valideynlər övladlarının üstündə mərkəzlənir
+/**
+ * Ailə ağacı düzülüş alqoritmi — Top-down Subtree Layout
+ *
+ * Prinsipler:
+ *  1. Hər "cütlük vahidi" (couple unit) bir bütöv kimi işlənir.
+ *  2. Hər vahidin məxsus olduğu valideyn vahidi müəyyən edilir.
+ *  3. Alt-ağac genişliyi rekursiv hesablanır.
+ *  4. Yuxarıdan aşağıya mövqe verilir — hər valideyn öz övladlarının
+ *     mərkəzinə düşür, heç bir qarışıqlıq olmur.
+ */
 
 export function buildTreeLayout(people) {
   if (!people.length) {
@@ -12,15 +17,16 @@ export function buildTreeLayout(people) {
   const byId = Object.fromEntries(people.map((p) => [p.id, p]));
   const NODE_W = 170;
   const NODE_H = 88;
-  const H_GAP  = 24;
-  const V_GAP  = 110;
+  const H_GAP  = 32;   // üfüqi boşluq (vahidlər arası)
+  const V_GAP  = 120;  // şaquli boşluq (nəsillər arası)
 
-  // ── Nəsil dərəcəsini hesabla ──────────────────────────────────────────────
-  const gen = {};
+  // ── 1. Nəsil dərəcəsi ────────────────────────────────────────────────────
+  const gen      = {};
   const visiting = new Set();
+
   const calcGen = (id) => {
     if (gen[id] !== undefined) return gen[id];
-    if (visiting.has(id)) return 0;
+    if (visiting.has(id))       return 0;
     visiting.add(id);
     const p = byId[id];
     if (!p) return 0;
@@ -33,112 +39,160 @@ export function buildTreeLayout(people) {
   };
   people.forEach((p) => calcGen(p.id));
 
-  // Ər-arvad eyni nəsildə olmalıdır
+  // Ər-arvad eyni nəsil dərəcəsini paylaşır
   people.forEach((p) => {
     if (p.spouseId && byId[p.spouseId]) {
-      const mx = Math.max(gen[p.id], gen[p.spouseId]);
-      gen[p.id] = mx;
+      const mx = Math.max(gen[p.id] ?? 0, gen[p.spouseId] ?? 0);
+      gen[p.id]       = mx;
       gen[p.spouseId] = mx;
     }
   });
 
-  // ── Sıralama: nəsil → doğum tarixi ──────────────────────────────────────
-  const sortedPeople = [...people].sort((a, b) => {
-    if (gen[a.id] !== gen[b.id]) return gen[a.id] - gen[b.id];
-    const da = a.birthDate || '9999-99-99';
-    const db_ = b.birthDate || '9999-99-99';
-    return da.localeCompare(db_);
-  });
-
-  // ── Cütlük vahidləri (units) ──────────────────────────────────────────────
+  // ── 2. Cütlük vahidlərini yarat ──────────────────────────────────────────
   const placed = new Set();
   const units  = [];
+  const unitOf = {}; // şəxs id → vahid
 
-  sortedPeople.forEach((p) => {
+  // Nəsil → doğum tarixi sırası
+  const sorted = [...people].sort((a, b) => {
+    const gd = (gen[a.id] ?? 0) - (gen[b.id] ?? 0);
+    if (gd !== 0) return gd;
+    return (a.birthDate || '9999').localeCompare(b.birthDate || '9999');
+  });
+
+  sorted.forEach((p) => {
     if (placed.has(p.id)) return;
-    const spouse = p.spouseId ? byId[p.spouseId] : null;
+    const sp = p.spouseId ? byId[p.spouseId] : null;
 
-    if (spouse && !placed.has(p.spouseId)) {
-      // Valideynləri olan şəxs birinci gedər — struktur sabit qalar
-      const pHasParents = !!(p.fatherId || p.motherId);
-      const sHasParents = !!(spouse.fatherId || spouse.motherId);
-      let firstId, secondId;
-      if (!pHasParents && sHasParents) {
-        firstId = p.spouseId; secondId = p.id;
-      } else {
-        firstId = p.id; secondId = p.spouseId;
-      }
-      units.push({ ids: [firstId, secondId], gen: gen[p.id] });
-      placed.add(p.id);
-      placed.add(p.spouseId);
+    if (sp && !placed.has(sp.id)) {
+      // Ailə kökü olan şəxs birinci gedər
+      const pHasParents = !!(p.fatherId  || p.motherId);
+      const sHasParents = !!(sp.fatherId || sp.motherId);
+      const ids = (!pHasParents && sHasParents) ? [sp.id, p.id] : [p.id, sp.id];
+      const u   = { ids, gen: gen[p.id] ?? 0 };
+      units.push(u);
+      ids.forEach((id) => { unitOf[id] = u; placed.add(id); });
     } else {
-      units.push({ ids: [p.id], gen: gen[p.id] });
+      const u = { ids: [p.id], gen: gen[p.id] ?? 0 };
+      units.push(u);
+      unitOf[p.id] = u;
       placed.add(p.id);
     }
   });
 
-  // ── Nəsillər üzrə qruplaşdır ─────────────────────────────────────────────
-  const byGen = {};
-  units.forEach((u) => { (byGen[u.gen] = byGen[u.gen] || []).push(u); });
-  const maxGen = Math.max(...Object.keys(byGen).map(Number), 0);
+  const unitW = (u) => u.ids.length * NODE_W + (u.ids.length - 1) * 10;
 
-  // Hər nəsil sırasını doğum tarixinə görə sırala
-  const getPrimary = (unit) => {
-    for (const id of unit.ids) {
+  // ── 3. Hər vahidin sahibi olan valideyn vahidini tap ─────────────────────
+  //
+  // Qayda: vahiddəki şəxsin atası ağacda varsa → ata vahidi sahib olur.
+  //        ata yoxdursa → ana vahidi sahib olur.
+  //        Heç biri yoxdursa → vahid kökdür.
+
+  const ownedBy = new Map(); // valideyn vahidi → [övlad vahidlər]
+  units.forEach((u) => ownedBy.set(u, []));
+
+  units.forEach((childUnit) => {
+    // Bu vahiddə valideynləri olan əsas şəxsi tap
+    let primary = null;
+    for (const id of childUnit.ids) {
       const p = byId[id];
-      if (p?.fatherId || p?.motherId) return p;
+      if (
+        (p.fatherId && unitOf[p.fatherId]) ||
+        (p.motherId && unitOf[p.motherId])
+      ) {
+        primary = p;
+        break;
+      }
     }
-    return byId[unit.ids[0]];
-  };
-  Object.values(byGen).forEach((row) => {
-    row.sort((a, b) => {
-      const da = getPrimary(a)?.birthDate || '9999-99-99';
-      const db_ = getPrimary(b)?.birthDate || '9999-99-99';
-      return da.localeCompare(db_);
-    });
+    if (!primary) return; // kök vahid
+
+    const ownerUnit =
+      (primary.fatherId ? unitOf[primary.fatherId] : null) ||
+      (primary.motherId ? unitOf[primary.motherId] : null);
+
+    if (ownerUnit && ownerUnit !== childUnit) {
+      ownedBy.get(ownerUnit).push(childUnit);
+    }
   });
 
-  // ── X mövqeyi hesabla ────────────────────────────────────────────────────
-  const unitWidth = (u) => u.ids.length * NODE_W + (u.ids.length - 1) * 10;
+  // ── 4. Övladları doğum tarixinə görə sırala ──────────────────────────────
+  const primaryBirth = (u) => {
+    for (const id of u.ids) {
+      if (byId[id]?.birthDate) return byId[id].birthDate;
+    }
+    return '9999';
+  };
 
-  // Aşağıdan yuxarıya: valideynləri övladlarının üstündə mərkəzləşdir
-  for (let g = maxGen; g >= 0; g--) {
-    const row = byGen[g] || [];
-    let cursor = 0;
+  ownedBy.forEach((children) => {
+    children.sort((a, b) => primaryBirth(a).localeCompare(primaryBirth(b)));
+  });
 
-    row.forEach((u) => {
-      const childUnits = units.filter(
-        (cu) =>
-          cu.gen === g + 1 &&
-          cu.ids.some((cid) => {
-            const c = byId[cid];
-            return u.ids.includes(c.fatherId) || u.ids.includes(c.motherId);
-          })
-      );
-      if (childUnits.length && childUnits.every((cu) => cu.x !== undefined)) {
-        const minX    = Math.min(...childUnits.map((cu) => cu.x));
-        const maxX    = Math.max(...childUnits.map((cu) => cu.x + unitWidth(cu)));
-        const desired = (minX + maxX) / 2 - unitWidth(u) / 2;
-        u.x = Math.max(cursor, desired);
-      } else {
-        u.x = cursor;
-      }
-      cursor = u.x + unitWidth(u) + H_GAP;
+  // ── 5. Alt-ağac genişliyi (rekursiv, keşli) ──────────────────────────────
+  const swCache = new Map();
+
+  const subtreeW = (u) => {
+    if (swCache.has(u)) return swCache.get(u);
+    const ch = ownedBy.get(u) || [];
+    const childrenW = ch.length
+      ? ch.reduce((s, c) => s + subtreeW(c), 0) + (ch.length - 1) * H_GAP
+      : 0;
+    const w = ch.length ? Math.max(unitW(u), childrenW) : unitW(u);
+    swCache.set(u, w);
+    return w;
+  };
+
+  // ── 6. Yuxarıdan aşağıya mövqe ver ──────────────────────────────────────
+  const positionUnit = (u, left) => {
+    const children = ownedBy.get(u) || [];
+
+    if (!children.length) {
+      // Yarpaq düyün: sadəcə sola yerləşdir
+      u.x = left;
+      return;
+    }
+
+    const totalChildW =
+      children.reduce((s, c) => s + subtreeW(c), 0) + (children.length - 1) * H_GAP;
+
+    // Övladları alt-ağac içində mərkəzləndir
+    const childOffset = Math.max(0, (subtreeW(u) - totalChildW) / 2);
+    let cursor = left + childOffset;
+
+    children.forEach((child) => {
+      positionUnit(child, cursor);
+      cursor += subtreeW(child) + H_GAP;
     });
 
-    // Üst-üstə düşməni həll et
-    for (let i = 1; i < row.length; i++) {
-      const prev     = row[i - 1];
-      const cur      = row[i];
-      const minStart = prev.x + unitWidth(prev) + H_GAP;
-      if (cur.x < minStart) cur.x = minStart;
-    }
-  }
+    // Valideyn vahidini övladlarının mərkəzinə yaz
+    const firstX = children[0].x;
+    const lastX  = children[children.length - 1].x + unitW(children[children.length - 1]);
+    u.x = (firstX + lastX) / 2 - unitW(u) / 2;
+  };
 
-  // ── Düyünlər ─────────────────────────────────────────────────────────────
+  // ── 7. Kök vahidlər ──────────────────────────────────────────────────────
+  const allOwned = new Set();
+  ownedBy.forEach((ch) => ch.forEach((c) => allOwned.add(c)));
+  const roots = units.filter((u) => !allOwned.has(u));
+  roots.sort((a, b) => primaryBirth(a).localeCompare(primaryBirth(b)));
+
+  let cursor = 0;
+  roots.forEach((root) => {
+    positionUnit(root, cursor);
+    cursor += subtreeW(root) + H_GAP;
+  });
+
+  // Mövqe verilməmiş vahidlər (kəsilmiş)
+  units.forEach((u) => {
+    if (u.x === undefined) {
+      u.x = cursor;
+      cursor += unitW(u) + H_GAP;
+    }
+  });
+
+  // ── 8. Düyünlər ──────────────────────────────────────────────────────────
   const nodes = [];
   units.forEach((u) => {
-    const y = u.gen * V_GAP;
+    const y = (u.gen ?? 0) * V_GAP;
     u.ids.forEach((id, idx) => {
       nodes.push({ id, x: u.x + idx * (NODE_W + 10), y, person: byId[id] });
     });
@@ -147,7 +201,7 @@ export function buildTreeLayout(people) {
   const nodeById = Object.fromEntries(nodes.map((n) => [n.id, n]));
   const links    = [];
 
-  // Valideyn → övlad bağlantıları
+  // Valideyn → övlad xətləri
   people.forEach((p) => {
     const child  = nodeById[p.id];
     if (!child) return;
@@ -156,32 +210,42 @@ export function buildTreeLayout(people) {
 
     if (father && mother) {
       const midX = (father.x + mother.x) / 2 + NODE_W / 2;
-      const midY = father.y + NODE_H;
-      links.push({ type: 'parent', x1: midX, y1: midY, x2: child.x + NODE_W / 2, y2: child.y });
+      links.push({
+        type: 'parent',
+        x1: midX,              y1: father.y + NODE_H,
+        x2: child.x + NODE_W / 2, y2: child.y,
+      });
     } else if (father) {
-      links.push({ type: 'parent', x1: father.x + NODE_W / 2, y1: father.y + NODE_H, x2: child.x + NODE_W / 2, y2: child.y });
+      links.push({
+        type: 'parent',
+        x1: father.x + NODE_W / 2, y1: father.y + NODE_H,
+        x2: child.x  + NODE_W / 2, y2: child.y,
+      });
     } else if (mother) {
-      links.push({ type: 'parent', x1: mother.x + NODE_W / 2, y1: mother.y + NODE_H, x2: child.x + NODE_W / 2, y2: child.y });
+      links.push({
+        type: 'parent',
+        x1: mother.x + NODE_W / 2, y1: mother.y + NODE_H,
+        x2: child.x  + NODE_W / 2, y2: child.y,
+      });
     }
   });
 
-  // Nikah bağlantıları
+  // Nikah xətləri
   const seenSpouse = new Set();
   people.forEach((p) => {
-    if (p.spouseId && !seenSpouse.has(p.id + ':' + p.spouseId)) {
-      seenSpouse.add(p.id + ':' + p.spouseId);
-      seenSpouse.add(p.spouseId + ':' + p.id);
-      const a = nodeById[p.id];
-      const b = nodeById[p.spouseId];
-      if (a && b) {
-        links.push({
-          type: 'spouse',
-          x1: Math.min(a.x, b.x) + NODE_W,
-          y1: a.y + NODE_H / 2,
-          x2: Math.max(a.x, b.x),
-          y2: b.y + NODE_H / 2,
-        });
-      }
+    if (!p.spouseId || seenSpouse.has(p.id + ':' + p.spouseId)) return;
+    seenSpouse.add(p.id + ':' + p.spouseId);
+    seenSpouse.add(p.spouseId + ':' + p.id);
+    const a = nodeById[p.id];
+    const b = nodeById[p.spouseId];
+    if (a && b) {
+      links.push({
+        type: 'spouse',
+        x1: Math.min(a.x, b.x) + NODE_W,
+        y1: a.y + NODE_H / 2,
+        x2: Math.max(a.x, b.x),
+        y2: b.y + NODE_H / 2,
+      });
     }
   });
 
